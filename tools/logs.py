@@ -3,17 +3,18 @@ from typing import List
 
 def get_logs(service: str) -> List[str]:
     """
-    Mock log retrieval tool.
+    Mock log provider (MVP).
 
-    Later this will integrate with:
+    Simulates structured application logs from:
     - Datadog Logs
-    - ELK Stack
+    - ELK stack
     - CloudWatch
-    - Grafana Loki
     """
 
     return [
         f"[{service}] ERROR: DB query latency spike detected",
-        f"[{service}] WARN: increased response time on /checkout",
-        f"[{service}] INFO: retry attempt succeeded after timeout"
+        f"[{service}] WARN: increased response time on /checkout endpoint",
+        f"[{service}] INFO: retry succeeded after timeout",
+        f"[{service}] ERROR: connection pool nearing limit",
+        f"[{service}] INFO: request completed with elevated latency"
     ]

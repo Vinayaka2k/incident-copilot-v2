@@ -1,18 +1,16 @@
-from datetime import datetime, timezone
 from tools.logs import get_logs
 from tools.metrics import get_metrics
 from tools.traces import get_trace
 
 
 # =========================================================
-# INCIDENT AGENT
+# INCIDENT AGENT (PURE LOGIC ENGINE)
 # =========================================================
-
 class IncidentAgent:
 
     def __init__(self, incident: dict):
+        # snapshot only (DO NOT MUTATE INCIDENT)
         self.incident = incident
-        self.trace = incident["trace"]
 
         self.context = {
             "service": incident.get("service"),
@@ -20,39 +18,22 @@ class IncidentAgent:
             "message": incident.get("message"),
         }
 
-    # -----------------------------------------------------
-    # TRACE LOGGER
-    # -----------------------------------------------------
-    def log(self, step: str, data=None):
-        self.trace.append({
-            "step": step,
-            "data": data,
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        })
-
-    # -----------------------------------------------------
+    # =====================================================
     # STEP 1: UNDERSTAND INCIDENT
-    # -----------------------------------------------------
+    # =====================================================
     def understand(self):
-        self.log("understand_incident")
+        service = self.context["service"]
 
-        # ✔ FIXED: no redundant condition
-        # For now, service comes directly from alert payload
-        self.context["suspected_service"] = self.context["service"]
+        self.context["suspected_service"] = service
 
-    # -----------------------------------------------------
-    # STEP 2: COLLECT DATA
-    # -----------------------------------------------------
+    # =====================================================
+    # STEP 2: COLLECT DATA FROM TOOLS
+    # =====================================================
     def collect_data(self):
         service = self.context["suspected_service"]
 
-        self.log("fetch_logs", {"service": service})
         logs = get_logs(service)
-
-        self.log("fetch_metrics", {"service": service})
         metrics = get_metrics(service)
-
-        self.log("fetch_trace", {"service": service})
         trace_data = get_trace(service)
 
         self.context.update({
@@ -61,59 +42,63 @@ class IncidentAgent:
             "trace_data": trace_data
         })
 
-    # -----------------------------------------------------
-    # STEP 3: ANALYZE DATA
-    # -----------------------------------------------------
+    # =====================================================
+    # STEP 3: ANALYZE INCIDENT (RULE-BASED MVP LOGIC)
+    # =====================================================
     def analyze(self):
-        self.log("analyze_incident")
-
         metrics = self.context["metrics"]
         logs = self.context["logs"]
 
-        if metrics["latency_p95"] > 700:
+        latency = metrics.get("latency_p95", 0)
+
+        # simple deterministic hypothesis logic (MVP-safe)
+        if latency > 700:
             if any("DB" in log for log in logs):
-                self.context["hypothesis"] = (
-                    "Database query inefficiency or missing index"
-                )
+                hypothesis = "Database query latency spike (possible missing index or slow query)"
             else:
-                self.context["hypothesis"] = (
-                    "High latency from non-DB component"
-                )
+                hypothesis = "High latency due to non-database service bottleneck"
+        elif metrics.get("error_rate", 0) > 0.03:
+            hypothesis = "Increased error rate indicating failing dependency or upstream outage"
         else:
-            self.context["hypothesis"] = "No clear anomaly detected"
+            hypothesis = "No clear anomaly detected from available signals"
 
-    # -----------------------------------------------------
-    # STEP 4: GENERATE RESULT
-    # -----------------------------------------------------
+        self.context["hypothesis"] = hypothesis
+
+    # =====================================================
+    # STEP 4: GENERATE FINAL RESULT (NO SIDE EFFECTS)
+    # =====================================================
     def generate_result(self):
-        self.log("generate_result")
-
-        result = {
+        return {
             "root_cause": self.context["hypothesis"],
-            "confidence": 0.82,
+            "confidence": 0.80,  # static MVP confidence (LLM later will replace this)
             "evidence": {
-                "logs": self.context["logs"],
-                "metrics": self.context["metrics"],
-                "trace": self.context["trace_data"]
+                "logs": self.context.get("logs", []),
+                "metrics": self.context.get("metrics", {}),
+                "trace": self.context.get("trace_data", {})
             },
-            "suggested_fix": "Investigate DB indexes and recent deployments"
+            "suggested_fix": self._suggest_fix()
         }
 
-        self.incident["result"] = result
-        self.incident["status"] = "COMPLETED"
+    # =====================================================
+    # SIMPLE RULE-BASED FIX SUGGESTION (MVP)
+    # =====================================================
+    def _suggest_fix(self):
+        hypothesis = self.context.get("hypothesis", "")
 
-        self.log("analysis_completed", result)
+        if "Database" in hypothesis:
+            return "Check recent deployments and add/verify DB indexes for slow queries"
+        if "latency" in hypothesis:
+            return "Investigate service dependency bottlenecks and recent traffic spikes"
+        if "error rate" in hypothesis:
+            return "Check upstream dependency failures and recent code changes"
 
-        return result
+        return "Collect more observability data and re-run investigation"
 
-    # -----------------------------------------------------
-    # MAIN EXECUTION LOOP
-    # -----------------------------------------------------
+    # =====================================================
+    # MAIN PIPELINE (PURE FUNCTION STYLE)
+    # =====================================================
     def run(self):
-        self.log("agent_started")
-
         self.understand()
         self.collect_data()
         self.analyze()
-
         return self.generate_result()

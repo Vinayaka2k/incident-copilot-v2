@@ -1,20 +1,17 @@
-from typing import Dict, List
+from typing import Dict
 
 
 def get_trace(service: str) -> Dict:
     """
-    Mock distributed trace retrieval tool.
+    Mock distributed trace provider (MVP).
 
-    Later this will integrate with:
-    - OpenTelemetry
-    - Datadog APM
-    - Jaeger
-    - Zipkin
+    Simulates OpenTelemetry / Jaeger / Datadog APM style traces.
     """
 
     return {
         "service": service,
         "trace_id": "trace-12345",
+
         "spans": [
             {
                 "span": "request_received",
@@ -29,11 +26,11 @@ def get_trace(service: str) -> Dict:
                 "duration_ms": 110
             },
             {
-                "span": "db_query_slow",
+                "span": "db_query",
                 "duration_ms": 620
             },
             {
-                "span": "response_delayed",
+                "span": "response_sent",
                 "duration_ms": 80
             }
         ]
