@@ -4,101 +4,190 @@ from tools.traces import get_trace
 
 
 # =========================================================
-# INCIDENT AGENT (PURE LOGIC ENGINE)
+# INCIDENT AGENT (AGENTIC VERSION)
 # =========================================================
 class IncidentAgent:
 
     def __init__(self, incident: dict):
-        # snapshot only (DO NOT MUTATE INCIDENT)
         self.incident = incident
 
+        # INTERNAL WORKING STATE
         self.context = {
             "service": incident.get("service"),
             "alert_type": incident.get("alert_type"),
             "message": incident.get("message"),
+
+            # investigation memory
+            "metrics": None,
+            "logs": None,
+            "trace_data": None,
+
+            # reasoning
+            "hypothesis": None
         }
 
     # =====================================================
-    # STEP 1: UNDERSTAND INCIDENT
+    # STEP 1: INITIAL UNDERSTANDING
     # =====================================================
     def understand(self):
-        service = self.context["service"]
-
-        self.context["suspected_service"] = service
+        self.context["suspected_service"] = self.context["service"]
 
     # =====================================================
-    # STEP 2: COLLECT DATA FROM TOOLS
+    # TOOL: FETCH METRICS
     # =====================================================
-    def collect_data(self):
+    def fetch_metrics(self):
+        service = self.context["suspected_service"]
+
+        metrics = get_metrics(service)
+
+        self.context["metrics"] = metrics
+
+        return metrics
+
+    # =====================================================
+    # TOOL: FETCH LOGS
+    # =====================================================
+    def fetch_logs(self):
         service = self.context["suspected_service"]
 
         logs = get_logs(service)
-        metrics = get_metrics(service)
+
+        self.context["logs"] = logs
+
+        return logs
+
+    # =====================================================
+    # TOOL: FETCH TRACES
+    # =====================================================
+    def fetch_traces(self):
+        service = self.context["suspected_service"]
+
         trace_data = get_trace(service)
 
-        self.context.update({
-            "logs": logs,
-            "metrics": metrics,
-            "trace_data": trace_data
-        })
+        self.context["trace_data"] = trace_data
+
+        return trace_data
 
     # =====================================================
-    # STEP 3: ANALYZE INCIDENT (RULE-BASED MVP LOGIC)
+    # AGENTIC REASONING LOOP
     # =====================================================
-    def analyze(self):
-        metrics = self.context["metrics"]
-        logs = self.context["logs"]
+    def investigate(self):
+
+        # -----------------------------------------------
+        # STEP 1: START WITH METRICS
+        # -----------------------------------------------
+        metrics = self.fetch_metrics()
 
         latency = metrics.get("latency_p95", 0)
+        error_rate = metrics.get("error_rate", 0)
 
-        # simple deterministic hypothesis logic (MVP-safe)
+        # -----------------------------------------------
+        # STEP 2: DECIDE NEXT ACTION
+        # -----------------------------------------------
         if latency > 700:
-            if any("DB" in log for log in logs):
-                hypothesis = "Database query latency spike (possible missing index or slow query)"
-            else:
-                hypothesis = "High latency due to non-database service bottleneck"
-        elif metrics.get("error_rate", 0) > 0.03:
-            hypothesis = "Increased error rate indicating failing dependency or upstream outage"
-        else:
-            hypothesis = "No clear anomaly detected from available signals"
 
-        self.context["hypothesis"] = hypothesis
+            # hypothesis from metrics
+            self.context["hypothesis"] = (
+                "Possible database or dependency latency issue"
+            )
+
+            # fetch logs because latency is suspicious
+            logs = self.fetch_logs()
+
+            # -------------------------------------------
+            # STEP 3: REASON OVER LOGS
+            # -------------------------------------------
+            if any("DB" in log for log in logs):
+
+                self.context["hypothesis"] = (
+                    "Database query latency spike detected"
+                )
+
+                # traces can confirm bottleneck
+                trace_data = self.fetch_traces()
+
+                slow_spans = [
+                    span for span in trace_data["spans"]
+                    if span["duration_ms"] > 500
+                ]
+
+                if slow_spans:
+                    self.context["hypothesis"] = (
+                        "Database bottleneck confirmed via distributed traces"
+                    )
+
+            else:
+                self.context["hypothesis"] = (
+                    "High latency without DB evidence"
+                )
+
+        elif error_rate > 0.03:
+
+            self.context["hypothesis"] = (
+                "Elevated error rate detected"
+            )
+
+            # fetch logs for failure evidence
+            self.fetch_logs()
+
+        else:
+
+            self.context["hypothesis"] = (
+                "No major anomaly detected"
+            )
 
     # =====================================================
-    # STEP 4: GENERATE FINAL RESULT (NO SIDE EFFECTS)
+    # FINAL RESULT
     # =====================================================
     def generate_result(self):
+
         return {
             "root_cause": self.context["hypothesis"],
-            "confidence": 0.80,  # static MVP confidence (LLM later will replace this)
+
+            "confidence": 0.84,
+
             "evidence": {
-                "logs": self.context.get("logs", []),
-                "metrics": self.context.get("metrics", {}),
-                "trace": self.context.get("trace_data", {})
+                "metrics": self.context["metrics"],
+                "logs": self.context["logs"],
+                "trace": self.context["trace_data"]
             },
+
             "suggested_fix": self._suggest_fix()
         }
 
     # =====================================================
-    # SIMPLE RULE-BASED FIX SUGGESTION (MVP)
+    # FIX SUGGESTIONS
     # =====================================================
     def _suggest_fix(self):
-        hypothesis = self.context.get("hypothesis", "")
+
+        hypothesis = self.context["hypothesis"]
 
         if "Database" in hypothesis:
-            return "Check recent deployments and add/verify DB indexes for slow queries"
-        if "latency" in hypothesis:
-            return "Investigate service dependency bottlenecks and recent traffic spikes"
-        if "error rate" in hypothesis:
-            return "Check upstream dependency failures and recent code changes"
+            return (
+                "Inspect slow DB queries and verify indexes"
+            )
 
-        return "Collect more observability data and re-run investigation"
+        if "latency" in hypothesis:
+            return (
+                "Investigate upstream dependencies and traffic spikes"
+            )
+
+        if "error rate" in hypothesis:
+            return (
+                "Inspect failing services and recent deployments"
+            )
+
+        return (
+            "Collect more telemetry data"
+        )
 
     # =====================================================
-    # MAIN PIPELINE (PURE FUNCTION STYLE)
+    # MAIN EXECUTION
     # =====================================================
     def run(self):
+
         self.understand()
-        self.collect_data()
-        self.analyze()
+
+        self.investigate()
+
         return self.generate_result()

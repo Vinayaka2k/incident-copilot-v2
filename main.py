@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from uuid import uuid4
 from datetime import datetime, timezone
@@ -12,13 +12,13 @@ app = FastAPI(
 )
 
 # =========================================================
-# IN-MEMORY INCIDENT STORE (MVP ONLY)
+# IN-MEMORY STORE
 # =========================================================
 INCIDENTS = {}
 
 
 # =========================================================
-# ALERT PAYLOAD MODEL (PagerDuty / Datadog / Sentry)
+# ALERT MODEL
 # =========================================================
 class AlertPayload(BaseModel):
     service: str
@@ -29,7 +29,7 @@ class AlertPayload(BaseModel):
 
 
 # =========================================================
-# TRACE LOGGER (ONLY main.py OWNS TRACE)
+# TRACE LOGGER
 # =========================================================
 def add_trace(incident: dict, step: str, data=None):
     incident["trace"].append({
@@ -40,7 +40,35 @@ def add_trace(incident: dict, step: str, data=None):
 
 
 # =========================================================
-# 1. ALERT INGESTION
+# BACKGROUND WORKER (THIS IS WHERE AGENT RUNS)
+# =========================================================
+def run_investigation(incident_id: str):
+    incident = INCIDENTS.get(incident_id)
+    if not incident:
+        return
+
+    try:
+        # mark running
+        incident["status"] = "RUNNING"
+        add_trace(incident, "investigation_started")
+
+        # run agent (pure logic)
+        agent = IncidentAgent(incident)
+        result = agent.run()
+
+        # store result
+        incident["result"] = result
+        incident["status"] = "COMPLETED"
+
+        add_trace(incident, "investigation_completed", result)
+
+    except Exception as e:
+        incident["status"] = "FAILED"
+        add_trace(incident, "investigation_failed", str(e))
+
+
+# =========================================================
+# 1. INGEST ALERT
 # =========================================================
 @app.post("/alerts")
 async def ingest_alert(payload: AlertPayload):
@@ -57,29 +85,45 @@ async def ingest_alert(payload: AlertPayload):
         "status": "CREATED",
         "created_at": datetime.now(timezone.utc),
 
-        # result will be filled after investigation
         "result": None,
-
-        # trace is owned ONLY here
         "trace": []
     }
 
     incident = INCIDENTS[incident_id]
-
-    add_trace(incident, "incident_created", {
-        "source": payload.source,
-        "severity": payload.severity
-    })
+    add_trace(incident, "incident_created")
 
     return {
-        "message": "Incident created successfully",
+        "message": "Incident created",
         "incident_id": incident_id,
         "status": incident["status"]
     }
 
 
 # =========================================================
-# 2. GET INCIDENT
+# 2. START INVESTIGATION (ASYNC)
+# =========================================================
+@app.post("/incidents/{incident_id}/investigate")
+async def investigate_incident(incident_id: str, background_tasks: BackgroundTasks):
+    incident = INCIDENTS.get(incident_id)
+
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    if incident["status"] == "RUNNING":
+        return {"message": "Already running"}
+
+    # enqueue background job
+    background_tasks.add_task(run_investigation, incident_id)
+
+    return {
+        "message": "Investigation started in background",
+        "incident_id": incident_id,
+        "status": "RUNNING"
+    }
+
+
+# =========================================================
+# 3. GET INCIDENT
 # =========================================================
 @app.get("/incidents/{incident_id}")
 def get_incident(incident_id: str):
@@ -92,44 +136,10 @@ def get_incident(incident_id: str):
 
 
 # =========================================================
-# 3. RUN INVESTIGATION (SYNCHRONOUS MVP FLOW)
-# =========================================================
-@app.post("/incidents/{incident_id}/investigate")
-def investigate_incident(incident_id: str):
-    incident = INCIDENTS.get(incident_id)
-
-    if not incident:
-        raise HTTPException(status_code=404, detail="Incident not found")
-
-    if incident["status"] == "RUNNING":
-        return {"message": "Investigation already running"}
-
-    # STEP 1: mark running (ONLY main.py changes state)
-    incident["status"] = "RUNNING"
-    add_trace(incident, "investigation_started")
-
-    # STEP 2: run pure agent
-    agent = IncidentAgent(incident)
-    result = agent.run()
-
-    # STEP 3: apply result (ONLY main.py mutates incident)
-    incident["result"] = result
-    incident["status"] = "COMPLETED"
-
-    add_trace(incident, "investigation_completed", result)
-
-    return {
-        "message": "Investigation completed",
-        "incident_id": incident_id,
-        "status": incident["status"]
-    }
-
-
-# =========================================================
-# 4. TRACE VIEWER
+# 4. TRACE
 # =========================================================
 @app.get("/incidents/{incident_id}/trace")
-def get_incident_trace(incident_id: str):
+def get_trace(incident_id: str):
     incident = INCIDENTS.get(incident_id)
 
     if not incident:
@@ -137,6 +147,5 @@ def get_incident_trace(incident_id: str):
 
     return {
         "incident_id": incident_id,
-        "status": incident["status"],
         "trace": incident["trace"]
     }
