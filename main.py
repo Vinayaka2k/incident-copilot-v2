@@ -3,139 +3,180 @@ from pydantic import BaseModel
 from uuid import uuid4
 from datetime import datetime, timezone
 
+
 app = FastAPI(
-    title="AI Incident Copilot MVP",
-    description="Slack-first AI system for incident debugging",
+    title="AI On-Call Automation",
+    description="AI Incident Investigation Agent",
     version="0.1.0"
 )
 
-# -----------------------------
-# IN-MEMORY STORAGE (MVP ONLY)
-# -----------------------------
+# =========================================================
+# MVP IN-MEMORY INCIDENT STORE
+# (Later -> Postgres + Redis)
+# =========================================================
 INCIDENTS = {}
 
 
-# -----------------------------
-# MODELS
-# -----------------------------
-class SlackIncidentRequest(BaseModel):
-    text: str
-    user: str | None = None
+# =========================================================
+# ALERT PAYLOAD MODEL
+# This simulates PagerDuty / Datadog / Sentry webhooks
+# =========================================================
+class AlertPayload(BaseModel):
+    service: str
+    severity: str
+    alert_type: str
+    message: str
+    source: str
 
 
-# -----------------------------
-# HELPERS
-# -----------------------------
-def add_trace(incident: dict, step: str):
-    """Utility to log execution steps for observability"""
+# =========================================================
+# TRACE LOGGER
+# =========================================================
+def add_trace(incident: dict, step: str, data=None):
     incident["trace"].append({
         "step": step,
+        "data": data,
         "timestamp": datetime.now(timezone.utc).isoformat()
     })
 
 
-# -----------------------------
-# 1. SLACK ENTRYPOINT
-# -----------------------------
-@app.post("/slack/incident")
-async def slack_incident(payload: SlackIncidentRequest):
+# =========================================================
+# 1. ALERT INGESTION ENDPOINT
+# =========================================================
+@app.post("/alerts")
+async def ingest_alert(payload: AlertPayload):
     """
-    Slack sends incident → we create internal incident object
+    Receives alerts from:
+    - PagerDuty
+    - Datadog
+    - Sentry
+    - Opsgenie
+
+    Creates an internal incident object.
     """
 
     incident_id = str(uuid4())
 
     INCIDENTS[incident_id] = {
         "id": incident_id,
-        "description": payload.text,
-        "created_by": payload.user,
-        "created_at": datetime.now(timezone.utc),
+        "service": payload.service,
+        "severity": payload.severity,
+        "alert_type": payload.alert_type,
+        "message": payload.message,
+        "source": payload.source,
         "status": "CREATED",
+        "created_at": datetime.now(timezone.utc),
         "result": None,
         "trace": []
     }
 
     incident = INCIDENTS[incident_id]
-    add_trace(incident, "incident_created")
+
+    add_trace(
+        incident,
+        "incident_created",
+        {
+            "source": payload.source,
+            "severity": payload.severity
+        }
+    )
 
     return {
-        "message": "Incident received",
+        "message": "Incident created successfully",
         "incident_id": incident_id,
-        "status": "CREATED"
+        "status": incident["status"]
     }
 
 
-# -----------------------------
+# =========================================================
 # 2. GET INCIDENT STATE
-# -----------------------------
-@app.get("/incident/{incident_id}")
+# =========================================================
+@app.get("/incidents/{incident_id}")
 def get_incident(incident_id: str):
-    """
-    Fetch current state of a single incident
-    """
 
     incident = INCIDENTS.get(incident_id)
 
     if not incident:
-        raise HTTPException(status_code=404, detail="Incident not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Incident not found"
+        )
 
     return incident
 
 
-# -----------------------------
-# 3. ANALYZE INCIDENT (MVP PLACEHOLDER)
-# -----------------------------
-@app.post("/incident/{incident_id}/analyze")
-def analyze_incident(incident_id: str):
-    """
-    Triggers AI analysis pipeline (currently mocked)
-    """
+# =========================================================
+# 3. START AI INVESTIGATION
+# =========================================================
+@app.post("/incidents/{incident_id}/investigate")
+def investigate_incident(incident_id: str):
 
     incident = INCIDENTS.get(incident_id)
 
     if not incident:
-        raise HTTPException(status_code=404, detail="Incident not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Incident not found"
+        )
 
     if incident["status"] == "RUNNING":
-        return {"message": "Already running"}
+        return {
+            "message": "Investigation already running"
+        }
 
     incident["status"] = "RUNNING"
-    add_trace(incident, "analysis_started")
 
-    # -------------------------
-    # MOCK AI RESULT (TEMPORARY)
-    # -------------------------
+    add_trace(
+        incident,
+        "investigation_started"
+    )
+
+    # =====================================================
+    # PLACEHOLDER RESULT
+    # (Later replaced with real AI agent)
+    # =====================================================
     incident["result"] = {
-        "root_cause": "Database latency spike due to missing index",
-        "confidence": 0.72,
-        "suggestion": "Add index on user_id column"
+        "root_cause": (
+            "Potential database latency spike "
+            "after recent deployment"
+        ),
+        "confidence": 0.81,
+        "suggested_fix": (
+            "Inspect recent DB queries and deployment changes"
+        )
     }
 
-    add_trace(incident, "analysis_completed")
     incident["status"] = "COMPLETED"
 
+    add_trace(
+        incident,
+        "investigation_completed",
+        incident["result"]
+    )
+
     return {
-        "message": "Analysis complete",
-        "incident_id": incident_id
+        "message": "Investigation completed",
+        "incident_id": incident_id,
+        "status": incident["status"]
     }
 
 
-# -----------------------------
-# 4. TRACE ENDPOINT (OBSERVABILITY)
-# -----------------------------
-@app.get("/incident/{incident_id}/trace")
-def get_trace(incident_id: str):
-    """
-    Returns step-by-step execution history
-    """
+# =========================================================
+# 4. INCIDENT TRACE / OBSERVABILITY
+# =========================================================
+@app.get("/incidents/{incident_id}/trace")
+def get_incident_trace(incident_id: str):
 
     incident = INCIDENTS.get(incident_id)
 
     if not incident:
-        raise HTTPException(status_code=404, detail="Incident not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Incident not found"
+        )
 
     return {
         "incident_id": incident_id,
-        "trace": incident["trace"],
-        "status": incident["status"]
+        "status": incident["status"],
+        "trace": incident["trace"]
     }
